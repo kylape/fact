@@ -6,7 +6,9 @@ RUN dnf install --enablerepo=crb -y \
         protobuf-compiler \
         protobuf-devel \
         cargo-1.84.1 \
-        rust-1.84.1 && \
+        rust-1.84.1 \
+        rpm \
+        rpm-devel && \
     mkdir /app
 
 WORKDIR /app
@@ -20,6 +22,11 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
 
 FROM registry.access.redhat.com/ubi9/ubi-micro:latest
 
+RUN microdnf install -y rpm && microdnf clean all
+
 COPY --from=builder /app/fact /usr/local/bin
+
+ENV FACT_RPMDB=/host/var/lib/rpm
+ENV FACT_HOST_MOUNT=/host
 
 ENTRYPOINT ["fact"]
