@@ -4,20 +4,30 @@ use aya::{
     Btf,
 };
 use client::Client;
-use config::FactConfig;
+use config::{AgentMode, FactConfig};
 use event::Event;
 use log::{debug, info};
 use tokio::{io::unix::AsyncFd, signal, task::yield_now};
 
 mod bpf;
+mod certs;
 mod client;
 pub mod config;
 mod event;
 mod host_info;
+mod vm_agent;
+mod vsock;
 
 use bpf::bindings::{event_t, path_cfg_t};
 
 pub async fn run(config: FactConfig) -> anyhow::Result<()> {
+    match config.mode {
+        AgentMode::FileMonitor => run_file_monitor(config).await,
+        AgentMode::VmAgent => vm_agent::run_vm_agent(&config).await,
+    }
+}
+
+async fn run_file_monitor(config: FactConfig) -> anyhow::Result<()> {
     // Bump the memlock rlimit. This is needed for older kernels that don't use the
     // new memcg based accounting, see https://lwn.net/Articles/837122/
     let rlim = libc::rlimit {
