@@ -1,104 +1,158 @@
-use aya::{
-    maps::{Array, MapData, RingBuf},
-    programs::Lsm,
-    Btf,
+use std::time::Duration;
+
+use anyhow::Result;
+use config::FactConfig;
+use log::{info, warn};
+use monitor::{Monitor, MonitorEvent, MonitorRegistry};
+use monitors::{
+    file_monitor::{FileMonitor, FileMonitorConfig},
+    package_monitor::{PackageMonitor, PackageMonitorConfig},
 };
-use client::Client;
-use config::{AgentMode, FactConfig};
-use event::Event;
-use log::{debug, info};
-use tokio::{io::unix::AsyncFd, signal, task::yield_now};
+use tokio::{signal, sync::mpsc};
 
 mod bpf;
-mod certs;
-mod client;
+pub mod certs;
+pub mod client;
 pub mod config;
 mod event;
 mod host_info;
+pub mod monitor;
+pub mod monitors;
 mod vm_agent;
 mod vsock;
 
-use bpf::bindings::{event_t, path_cfg_t};
-
-pub async fn run(config: FactConfig) -> anyhow::Result<()> {
-    match config.mode {
-        AgentMode::FileMonitor => run_file_monitor(config).await,
-        AgentMode::VmAgent => vm_agent::run_vm_agent(&config).await,
+pub async fn run(config: FactConfig) -> Result<()> {
+    let config = config.with_defaults();
+    
+    // Create monitor registry and register available monitors
+    let mut registry = MonitorRegistry::new();
+    
+    // Register file monitor if enabled
+    if config.enable_file_monitor {
+        let file_config = FileMonitorConfig {
+            paths: config.paths.clone(),
+        };
+        let file_monitor = FileMonitor::new(file_config);
+        registry.register(file_monitor);
     }
+    
+    // Register package monitor if enabled  
+    if config.enable_package_monitor {
+        let certs = if let Some(certs_path) = &config.certs {
+            Some(certs_path.clone().try_into()?)
+        } else {
+            None
+        };
+        
+        let package_config = PackageMonitorConfig {
+            rpmdb: config.rpmdb.clone(),
+            interval: Duration::from_secs(config.interval),
+            url: if !config.skip_http { config.url.clone() } else { None },
+            certs,
+            use_vsock: config.use_vsock,
+            skip_http: config.skip_http,
+        };
+        let package_monitor = PackageMonitor::new(package_config);
+        registry.register(package_monitor);
+    }
+    
+    // Start the monitoring system
+    run_monitors(registry).await
 }
 
-async fn run_file_monitor(config: FactConfig) -> anyhow::Result<()> {
-    // Bump the memlock rlimit. This is needed for older kernels that don't use the
-    // new memcg based accounting, see https://lwn.net/Articles/837122/
-    let rlim = libc::rlimit {
-        rlim_cur: libc::RLIM_INFINITY,
-        rlim_max: libc::RLIM_INFINITY,
-    };
-    let ret = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) };
-    if ret != 0 {
-        debug!("remove limit on locked memory failed, ret is: {ret}");
+async fn run_monitors(mut registry: MonitorRegistry) -> Result<()> {
+    let (event_tx, mut event_rx) = mpsc::channel(1000);
+    
+    info!("Starting fact monitoring system");
+    
+    // Check which monitors can run and start them
+    let mut started_monitors = Vec::new();
+    for monitor in registry.monitors.iter_mut() {
+        match monitor.can_run().await {
+            Ok(true) => {
+                info!("Starting monitor: {}", monitor.name());
+                match monitor.start(event_tx.clone()).await {
+                    Ok(()) => {
+                        started_monitors.push(monitor.name());
+                        info!("Monitor {} started successfully", monitor.name());
+                    }
+                    Err(e) => {
+                        warn!("Failed to start monitor {}: {}", monitor.name(), e);
+                    }
+                }
+            }
+            Ok(false) => {
+                info!("Monitor {} cannot run on this system", monitor.name());
+            }
+            Err(e) => {
+                warn!("Error checking if monitor {} can run: {}", monitor.name(), e);
+            }
+        }
     }
-
-    // Include the BPF object as raw bytes at compile-time and load it
-    // at runtime.
-    let mut bpf = aya::EbpfLoader::new()
-        .set_global("paths_len", &(config.paths.len() as u32), true)
-        .load(aya::include_bytes_aligned!(concat!(
-            env!("OUT_DIR"),
-            "/main.o"
-        )))?;
-
-    // Setup the ring buffer for events.
-    let ringbuf = bpf.take_map("rb").unwrap();
-    let ringbuf = RingBuf::try_from(ringbuf)?;
-    let mut async_fd = AsyncFd::new(ringbuf)?;
-
-    // Setup the map with the paths to be monitored
-    let paths_map = bpf.take_map("paths_map").unwrap();
-    let mut paths_map: Array<MapData, path_cfg_t> = Array::try_from(paths_map)?;
-    let mut path_cfg = path_cfg_t::new();
-    for (i, p) in config.paths.iter().enumerate() {
-        info!("Monitoring: {p:?}");
-        path_cfg.set(p.to_str().unwrap());
-        paths_map.set(i as u32, path_cfg, 0)?;
+    
+    if started_monitors.is_empty() {
+        warn!("No monitors were started!");
+        return Ok(());
     }
-
-    // Load the programs
-    let btf = Btf::from_sys_fs()?;
-    let program: &mut Lsm = bpf.program_mut("trace_file_open").unwrap().try_into()?;
-    program.load("file_open", &btf)?;
-    program.attach()?;
-
-    // Create the gRPC client
-    let mut client = if let Some(url) = config.url.as_ref() {
-        Some(Client::start(url, config.certs)?)
+    
+    info!("Started {} monitor(s): {:?}", started_monitors.len(), started_monitors);
+    
+    // Create the gRPC client for file events if needed
+    let mut client = if let Some(url) = std::env::var("FACT_URL").ok() {
+        let certs_path = std::env::var("FACT_CERTS").ok().map(std::path::PathBuf::from);
+        match client::Client::start(&url, certs_path) {
+            Ok(client) => Some(client),
+            Err(e) => {
+                warn!("Failed to create gRPC client: {}", e);
+                None
+            }
+        }
     } else {
         None
     };
-
-    // Gather events from the ring buffer and print them out.
-    tokio::spawn(async move {
-        loop {
-            let mut guard = async_fd.readable_mut().await.unwrap();
-            let ringbuf = guard.get_inner_mut();
-            while let Some(event) = ringbuf.next() {
-                let event: &event_t = unsafe { &*(event.as_ptr() as *const _) };
-                let event: Event = event.try_into().unwrap();
-
-                println!("{event:?}");
-                if let Some(client) = client.as_mut() {
-                    let _ = client.send(event).await;
+    
+    // Event processing loop
+    let event_processing = tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            match event {
+                MonitorEvent::FileActivity(file_event) => {
+                    println!("{file_event:?}");
+                    if let Some(client) = client.as_mut() {
+                        if let Err(e) = client.send(file_event).await {
+                            warn!("Failed to send file event: {}", e);
+                        }
+                    }
+                }
+                MonitorEvent::PackageUpdate(vm_data) => {
+                    info!(
+                        "Package update: {} components", 
+                        vm_data.scan.as_ref().map(|s| s.components.len()).unwrap_or(0)
+                    );
                 }
             }
-            guard.clear_ready();
-            yield_now().await;
         }
     });
-
+    
+    // Wait for shutdown signal
     let ctrl_c = signal::ctrl_c();
-    info!("Waiting for Ctrl-C...");
+    info!("Monitoring system running. Press Ctrl-C to exit...");
     ctrl_c.await?;
-    info!("Exiting...");
-
+    info!("Shutdown signal received, stopping monitors...");
+    
+    // Stop all monitors
+    for monitor in registry.monitors.iter_mut() {
+        if monitor.is_running() {
+            if let Err(e) = monitor.stop().await {
+                warn!("Error stopping monitor {}: {}", monitor.name(), e);
+            } else {
+                info!("Monitor {} stopped", monitor.name());
+            }
+        }
+    }
+    
+    // Cancel event processing
+    event_processing.abort();
+    
+    info!("Fact monitoring system stopped");
     Ok(())
 }
