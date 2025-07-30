@@ -1,9 +1,9 @@
-use std::os::unix::io::{AsRawFd, RawFd, OwnedFd};
+use std::os::unix::io::{AsRawFd, RawFd, OwnedFd, FromRawFd};
 use std::io;
 use anyhow::{Context, Result};
 use log::{debug, info, warn};
 use nix::sys::socket::{
-    accept, bind, connect, listen, socket, AddressFamily, SockFlag, SockType, VsockAddr,
+    accept, bind, connect, listen, socket, AddressFamily, SockFlag, SockType, VsockAddr, Backlog,
 };
 use tokio::sync::mpsc;
 
@@ -165,7 +165,7 @@ impl VsockServer {
         bind(fd.as_raw_fd(), &addr).context("Failed to bind VSOCK server")?;
         
         // Start listening for connections
-        listen(&fd, 128).context("Failed to listen on VSOCK socket")?;
+        listen(&fd, Backlog::new(128).unwrap()).context("Failed to listen on VSOCK socket")?;
         
         info!("VSOCK server listening on port {}", port);
         Ok(VsockServer {
@@ -206,8 +206,8 @@ impl VsockServer {
     /// Accept a single connection and handle it
     async fn accept_connection(&self, vm_tx: mpsc::Sender<VmMessage>) -> Result<()> {
         // Accept connection (blocking, but we're in a select loop)
-        let (client_fd, client_addr) = match accept(self.listener_fd.as_raw_fd()) {
-            Ok((fd, addr)) => (fd, addr),
+        let client_fd = match accept(self.listener_fd.as_raw_fd()) {
+            Ok(fd) => fd,
             Err(e) => {
                 warn!("Failed to accept VSOCK connection: {}", e);
                 return Ok(());
@@ -215,7 +215,7 @@ impl VsockServer {
         };
         
         let client_fd = unsafe { OwnedFd::from_raw_fd(client_fd) };
-        let vm_id = format!("vm-{}", client_addr.as_raw());
+        let vm_id = format!("vm-{}", client_fd.as_raw_fd());
         
         info!("Accepted VSOCK connection from {}", vm_id);
         

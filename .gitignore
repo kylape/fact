@@ -11,3 +11,8 @@ target/
 # Python stuff
 __pycache__/
 .venv/
+
+# Downloaded protoc binaries and includes (use system protoc)
+include/
+protoc-*.zip
+readme.txt

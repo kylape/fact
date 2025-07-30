@@ -1,17 +1,17 @@
-use core::time;
 use std::{env, fs::read_to_string, path::PathBuf, process::Command, str::FromStr, sync::LazyLock};
 
 use anyhow::Context;
 use crate::certs::Certs;
 use crate::config::FactConfig;
-use crate::client::{
+use fact_api::{
     sensor::{
         virtual_machine_service_client::VirtualMachineServiceClient, UpsertVirtualMachineRequest,
     },
     storage::{EmbeddedImageScanComponent, VirtualMachine, VirtualMachineScan},
 };
-use crossbeam::{
-    channel::{bounded, tick},
+use tokio::{
+    sync::mpsc,
+    time::{interval, Duration},
     select,
 };
 use log::{debug, info};
@@ -71,9 +71,29 @@ impl VmAgent {
         info!("Parsing...");
         let pkgs = stdout
             .lines()
-            .map(str::parse::<EmbeddedImageScanComponent>)
-            .collect::<Result<Vec<_>, _>>()
-            .context("Failed to parse package information")?;
+            .filter_map(|line| {
+                let parts: Vec<&str> = line.split('|').collect();
+                if parts.len() >= 4 {
+                    Some(EmbeddedImageScanComponent {
+                        name: parts[0].to_string(),
+                        version: format!("{}-{}", parts[1], parts[2]), // Combine version and release
+                        architecture: parts[3].to_string(),
+                        source: 0, // SourceType::Os
+                        license: None,
+                        vulns: vec![],
+                        priority: 0,
+                        location: String::new(),
+                        risk_score: 0.0,
+                        fixed_by: String::new(),
+                        executables: vec![],
+                        has_layer_index: None,
+                        set_top_cvss: None,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
         debug!("{pkgs:?}");
 
         info!("Sending updates...");
@@ -188,8 +208,8 @@ impl TryFrom<&FactConfig> for VmAgent {
 }
 
 pub async fn run_vm_agent(config: &FactConfig) -> anyhow::Result<()> {
-    let (tx, rx) = bounded(0);
-    let ticks = tick(time::Duration::from_secs(config.interval));
+    let (tx, mut rx) = mpsc::channel::<()>(1);
+    let mut ticks = interval(Duration::from_secs(config.interval));
     let mut vm_agent: VmAgent = config.try_into()?;
 
     // Check VSOCK availability if requested
@@ -208,7 +228,7 @@ pub async fn run_vm_agent(config: &FactConfig) -> anyhow::Result<()> {
     }
 
     ctrlc::set_handler(move || {
-        tx.send(()).unwrap();
+        let _ = tx.try_send(());
     })
     .context("Failed setting signal handler")?;
 
@@ -217,8 +237,10 @@ pub async fn run_vm_agent(config: &FactConfig) -> anyhow::Result<()> {
 
     loop {
         select! {
-            recv(ticks) -> _ => vm_agent.run().await?,
-            recv(rx) -> _ => {
+            _ = ticks.tick() => {
+                vm_agent.run().await?;
+            }
+            _ = rx.recv() => {
                 info!("Shutting down...");
                 break;
             }

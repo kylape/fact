@@ -281,15 +281,17 @@ async fn run_hybrid_mode(config: FactConfig) -> anyhow::Result<()> {
         let mut sensor_relay = SensorRelay::new(config.sensor_endpoint.clone(), certs);
         let (vm_msg_tx, vm_msg_rx) = tokio::sync::mpsc::channel::<VmMessage>(100);
         
+        let shutdown_tx_clone = shutdown_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = sensor_relay.start(vm_msg_rx, shutdown_tx.subscribe()).await {
+            if let Err(e) = sensor_relay.start(vm_msg_rx, shutdown_tx_clone.subscribe()).await {
                 warn!("Sensor relay error: {}", e);
             }
         });
         
         // Start VSOCK server
+        let shutdown_tx_clone = shutdown_tx.clone();
         tokio::spawn(async move {
-            if let Err(e) = vsock_server.serve(shutdown_tx.subscribe()).await {
+            if let Err(e) = vsock_server.serve(shutdown_tx_clone.subscribe()).await {
                 warn!("VSOCK server error: {}", e);
             }
         });

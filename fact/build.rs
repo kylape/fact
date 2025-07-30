@@ -67,8 +67,52 @@ fn main() -> anyhow::Result<()> {
         generate_bindings(&out_dir)?;
     } else {
         println!("cargo:warning=Clang not found, skipping eBPF compilation");
-        // Create empty bindings file for compilation
-        std::fs::write(out_dir.join("bindings.rs"), "// Empty bindings for testing")?;
+        // Create stub bindings file for compilation
+        let stub_bindings = r#"
+pub const PATH_MAX: usize = 4096;
+pub const TASK_COMM_LEN: usize = 16;
+pub const LINEAGE_MAX: usize = 2;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct lineage_t {
+    pub uid: u32,
+    pub exe_path: [i8; PATH_MAX],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct process_t {
+    pub comm: [i8; TASK_COMM_LEN],
+    pub args: [i8; 4096],
+    pub exe_path: [i8; PATH_MAX],
+    pub cpu_cgroup: [i8; PATH_MAX],
+    pub uid: u32,
+    pub gid: u32,
+    pub login_uid: u32,
+    pub pid: u32,
+    pub lineage: [lineage_t; LINEAGE_MAX],
+    pub lineage_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct event_t {
+    pub timestamp: u64,
+    pub process: process_t,
+    pub is_external_mount: i8,
+    pub filename: [i8; PATH_MAX],
+    pub host_file: [i8; PATH_MAX],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct path_cfg_t {
+    pub path: [i8; PATH_MAX],
+    pub len: u16,
+}
+"#;
+        std::fs::write(out_dir.join("bindings.rs"), stub_bindings)?;
         // Create empty eBPF object for compilation
         std::fs::write(out_dir.join("main.o"), "")?;
     }

@@ -11,13 +11,14 @@ use std::str::FromStr;
 use crate::{
     certs::Certs,
     vsock::VmMessage,
-    client::{
-        sensor::{
-            virtual_machine_service_client::VirtualMachineServiceClient, 
-            UpsertVirtualMachineRequest,
-        },
-        storage::{VirtualMachine, VirtualMachineScan},
+};
+
+use fact_api::{
+    sensor::{
+        virtual_machine_service_client::VirtualMachineServiceClient, 
+        UpsertVirtualMachineRequest,
     },
+    storage::{VirtualMachine, VirtualMachineScan},
 };
 
 #[derive(Debug, Clone)]

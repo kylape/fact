@@ -8,7 +8,10 @@ use crate::{
 };
 
 fn slice_to_string(s: &[i8]) -> anyhow::Result<String> {
-    Ok(unsafe { CStr::from_ptr(s.as_ptr()) }.to_str()?.to_owned())
+    Ok(unsafe { 
+        let ptr = s.as_ptr() as *const u8;
+        CStr::from_ptr(ptr)
+    }.to_str()?.to_owned())
 }
 
 #[derive(Debug, Default)]
@@ -31,7 +34,10 @@ impl TryFrom<&lineage_t> for Lineage {
 
     fn try_from(value: &lineage_t) -> Result<Self, Self::Error> {
         let lineage_t { uid, exe_path } = value;
-        let exe_path = unsafe { CStr::from_ptr(exe_path.as_ptr()) }.to_str()?;
+        let exe_path = unsafe { 
+            let ptr = exe_path.as_ptr() as *const u8;
+            CStr::from_ptr(ptr)
+        }.to_str()?;
 
         Ok(Lineage::new(*uid, exe_path))
     }
@@ -93,7 +99,10 @@ impl TryFrom<process_t> for Process {
     fn try_from(value: process_t) -> Result<Self, Self::Error> {
         let comm = slice_to_string(value.comm.as_slice())?;
         let exe_path = slice_to_string(value.exe_path.as_slice())?;
-        let cpu_cgroup = unsafe { CStr::from_ptr(value.cpu_cgroup.as_ptr()) }.to_str()?;
+        let cpu_cgroup = unsafe { 
+            let ptr = value.cpu_cgroup.as_ptr() as *const u8;
+            CStr::from_ptr(ptr)
+        }.to_str()?;
         let container_id = Process::extract_container_id(cpu_cgroup);
 
         let lineage = value.lineage[..value.lineage_len as usize]
@@ -104,7 +113,10 @@ impl TryFrom<process_t> for Process {
         let mut converted_args = Vec::new();
         let mut offset = 0;
         while offset < 4096 {
-            let arg = unsafe { CStr::from_ptr(value.args.as_ptr().add(offset)) }
+            let arg = unsafe { 
+                let ptr = value.args.as_ptr().add(offset) as *const u8;
+                CStr::from_ptr(ptr)
+            }
                 .to_str()?
                 .to_owned();
             if arg.is_empty() {

@@ -8,7 +8,7 @@ pub mod bindings {
     impl path_cfg_t {
         pub fn new() -> Self {
             path_cfg_t {
-                path: [0; 4096],
+                path: [0; PATH_MAX],
                 len: 0,
             }
         }
@@ -34,4 +34,7 @@ pub mod bindings {
     }
 
     unsafe impl Pod for path_cfg_t {}
+    unsafe impl Pod for lineage_t {}
+    unsafe impl Pod for process_t {}
+    unsafe impl Pod for event_t {}
 }
