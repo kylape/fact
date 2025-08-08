@@ -136,6 +136,7 @@ impl VmAgent {
         };
         let vm = VirtualMachine {
             id: HOSTNAME.to_string(),
+            name: HOSTNAME.to_string(),
             scan: Some(scan),
             ..Default::default()
         };
@@ -224,7 +225,7 @@ pub async fn run_vm_agent(config: &FactConfig) -> anyhow::Result<()> {
     } else if vm_agent.url.is_some() {
         info!("Using gRPC communication mode");
     } else {
-        info!("No communication method configured (dry run mode)");
+        info!("No communication method configured");
     }
 
     ctrlc::set_handler(move || {

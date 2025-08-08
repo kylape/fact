@@ -6,7 +6,7 @@ use clap::{Parser, ValueEnum};
 pub enum AgentMode {
     /// File monitoring mode (eBPF, for Kubernetes nodes)
     FileMonitor,
-    /// VM agent mode (package scanning, for virtual machines)  
+    /// VM agent mode (package scanning, for virtual machines)
     VmAgent,
     /// VSOCK listener mode (server for VM connections)
     VsockListener,
@@ -26,7 +26,7 @@ pub struct FactConfig {
     pub paths: Vec<PathBuf>,
 
     /// URL to forward the packages to
-    #[arg(env = "FACT_URL")]
+    #[arg(long, env = "FACT_URL")]
     pub url: Option<String>,
 
     /// Directory holding the mTLS certificates and keys
