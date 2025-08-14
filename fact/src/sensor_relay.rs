@@ -15,10 +15,10 @@ use crate::{
 
 use fact_api::{
     sensor::{
-        virtual_machine_service_client::VirtualMachineServiceClient, 
-        UpsertVirtualMachineRequest,
+        virtual_machine_index_report_service_client::VirtualMachineIndexReportServiceClient,
+        UpsertVirtualMachineIndexReportRequest,
     },
-    storage::{VirtualMachine, VirtualMachineScan},
+    virtualmachine::v1::IndexReport,
 };
 
 #[derive(Debug, Clone)]
@@ -41,7 +41,7 @@ impl Interceptor for UserAgentInterceptor {
 pub struct SensorRelay {
     endpoint: String,
     certs: Option<Certs>,
-    client: Option<VirtualMachineServiceClient<InterceptedService<Channel, UserAgentInterceptor>>>,
+    client: Option<VirtualMachineIndexReportServiceClient<InterceptedService<Channel, UserAgentInterceptor>>>,
 }
 
 impl SensorRelay {
@@ -113,7 +113,7 @@ impl SensorRelay {
         let channel = channel.connect().await
             .context("Failed to connect to sensor")?;
         
-        let client = VirtualMachineServiceClient::with_interceptor(
+        let client = VirtualMachineIndexReportServiceClient::with_interceptor(
             channel,
             UserAgentInterceptor {},
         );
@@ -130,45 +130,48 @@ impl SensorRelay {
         let client = self.client.as_mut()
             .context("Sensor client not connected")?;
         
-        // Deserialize the VM data from protobuf
-        let vm_data = prost::Message::decode(vm_msg.data.as_slice())
-            .context("Failed to decode VM protobuf data")?;
+        // Deserialize the IndexReport data from protobuf
+        let index_report = prost::Message::decode(vm_msg.data.as_slice())
+            .context("Failed to decode IndexReport protobuf data")?;
         
         // Create the upsert request
-        let request = UpsertVirtualMachineRequest {
-            virtual_machine: Some(vm_data),
+        let request = UpsertVirtualMachineIndexReportRequest {
+            index_report: Some(index_report),
         };
         
         // Send to sensor
-        client.upsert_virtual_machine(request).await
-            .context("Failed to send VM data to sensor")?;
+        client.upsert_virtual_machine_index_report(request).await
+            .context("Failed to send IndexReport to sensor")?;
         
         debug!("Successfully forwarded VM message from {}", vm_msg.vm_id);
         Ok(())
     }
     
-    /// Send a test VM message (for development/testing)
+    /// Send a test IndexReport message (for development/testing)
     pub async fn send_test_vm(&mut self, vm_id: String) -> Result<()> {
         let client = self.client.as_mut()
             .context("Sensor client not connected")?;
         
-        let vm = VirtualMachine {
-            id: vm_id.clone(),
-            scan: Some(VirtualMachineScan {
-                components: vec![], // Empty scan for test
+        let index_report = IndexReport {
+            vsock_cid: vm_id.clone(),
+            index_v4: Some(fact_api::scanner::v4::IndexReport {
+                success: true,
+                contents: Some(fact_api::scanner::v4::Contents {
+                    packages: vec![], // Empty packages for test
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
-            ..Default::default()
         };
         
-        let request = UpsertVirtualMachineRequest {
-            virtual_machine: Some(vm),
+        let request = UpsertVirtualMachineIndexReportRequest {
+            index_report: Some(index_report),
         };
         
-        client.upsert_virtual_machine(request).await
-            .context("Failed to send test VM to sensor")?;
+        client.upsert_virtual_machine_index_report(request).await
+            .context("Failed to send test IndexReport to sensor")?;
         
-        info!("Sent test VM message for {}", vm_id);
+        info!("Sent test IndexReport message for {}", vm_id);
         Ok(())
     }
 }

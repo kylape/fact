@@ -5,9 +5,12 @@ use crate::certs::Certs;
 use crate::config::FactConfig;
 use fact_api::{
     sensor::{
-        virtual_machine_service_client::VirtualMachineServiceClient, UpsertVirtualMachineRequest,
+        virtual_machine_index_report_service_client::VirtualMachineIndexReportServiceClient,
+        UpsertVirtualMachineIndexReportRequest,
     },
-    storage::{EmbeddedImageScanComponent, VirtualMachine, VirtualMachineScan},
+    virtualmachine::v1::IndexReport,
+    scanner::v4::{Contents, Package},
+    storage::EmbeddedImageScanComponent,
 };
 use tokio::{
     sync::mpsc,
@@ -110,7 +113,7 @@ impl VmAgent {
         &self,
         url: String,
     ) -> anyhow::Result<
-        VirtualMachineServiceClient<InterceptedService<Channel, UserAgentInterceptor>>,
+        VirtualMachineIndexReportServiceClient<InterceptedService<Channel, UserAgentInterceptor>>,
     > {
         let mut channel = Channel::from_shared(url)?;
 
@@ -124,27 +127,45 @@ impl VmAgent {
 
         let channel = channel.connect().await?;
         let client =
-            VirtualMachineServiceClient::with_interceptor(channel, self.user_agent.clone());
+            VirtualMachineIndexReportServiceClient::with_interceptor(channel, self.user_agent.clone());
         Ok(client)
     }
 
     async fn send_grpc(&self, url: String, pkgs: Vec<EmbeddedImageScanComponent>) -> anyhow::Result<()> {
         let mut client = self.create_client(url).await?;
-        let scan = VirtualMachineScan {
-            components: pkgs,
+
+        // Convert EmbeddedImageScanComponent to scanner.v4.Package format
+        let packages: Vec<Package> = pkgs.into_iter().map(|comp| {
+            Package {
+                id: format!("{}-{}", comp.name, comp.version),
+                name: comp.name,
+                version: comp.version,
+                arch: comp.architecture,
+                ..Default::default()
+            }
+        }).collect();
+
+        let contents = Contents {
+            packages,
             ..Default::default()
-        };
-        let vm = VirtualMachine {
-            id: HOSTNAME.to_string(),
-            name: HOSTNAME.to_string(),
-            scan: Some(scan),
-            ..Default::default()
-        };
-        let request = UpsertVirtualMachineRequest {
-            virtual_machine: Some(vm),
         };
 
-        client.upsert_virtual_machine(request).await?;
+        let index_v4 = fact_api::scanner::v4::IndexReport {
+            success: true,
+            contents: Some(contents),
+            ..Default::default()
+        };
+
+        let index_report = IndexReport {
+            vsock_cid: HOSTNAME.to_string(), // Use hostname as identifier for now
+            index_v4: Some(index_v4),
+        };
+
+        let request = UpsertVirtualMachineIndexReportRequest {
+            index_report: Some(index_report),
+        };
+
+        client.upsert_virtual_machine_index_report(request).await?;
         Ok(())
     }
 
@@ -156,25 +177,41 @@ impl VmAgent {
         let mut client = VsockClient::connect()
             .context("Failed to connect to VSOCK endpoint")?;
 
-        // Create package data message
-        let scan = VirtualMachineScan {
-            components: pkgs,
-            ..Default::default()
-        };
-        let vm = VirtualMachine {
-            id: HOSTNAME.to_string(),
-            scan: Some(scan),
+        // Convert to new IndexReport format
+        let packages: Vec<Package> = pkgs.into_iter().map(|comp| {
+            Package {
+                id: format!("{}-{}", comp.name, comp.version),
+                name: comp.name,
+                version: comp.version,
+                arch: comp.architecture,
+                ..Default::default()
+            }
+        }).collect();
+
+        let contents = Contents {
+            packages,
             ..Default::default()
         };
 
-        // Serialize the VM data to protobuf bytes
-        let data = vm.encode_to_vec();
+        let index_v4 = fact_api::scanner::v4::IndexReport {
+            success: true,
+            contents: Some(contents),
+            ..Default::default()
+        };
+
+        let index_report = IndexReport {
+            vsock_cid: HOSTNAME.to_string(),
+            index_v4: Some(index_v4),
+        };
+
+        // Serialize the IndexReport to protobuf bytes
+        let data = index_report.encode_to_vec();
 
         // Send the protobuf data
         client.send_data(&data)
             .context("Failed to send VM data via VSOCK")?;
 
-        info!("Successfully sent {} packages via VSOCK", vm.scan.as_ref().map(|s| s.components.len()).unwrap_or(0));
+        info!("Successfully sent {} packages via VSOCK", index_report.index_v4.as_ref().and_then(|i| i.contents.as_ref()).map(|c| c.packages.len()).unwrap_or(0));
         Ok(())
     }
 }

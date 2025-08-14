@@ -4,6 +4,9 @@ fn main() -> anyhow::Result<()> {
         .compile_protos(
             &[
                 "../third_party/stackrox/proto/internalapi/sensor/virtual_machine_iservice.proto",
+                "../third_party/stackrox/proto/internalapi/virtualmachine/v1/index_report.proto",
+                "../third_party/stackrox/proto/internalapi/scanner/v4/index_report.proto",
+                "../third_party/stackrox/proto/internalapi/scanner/v4/common.proto",
                 "../third_party/stackrox/proto/internalapi/sensor/sfa.proto",
                 "../third_party/stackrox/proto/internalapi/sensor/sfa_iservice.proto",
                 "../third_party/stackrox/proto/internalapi/sensor/collector.proto",
