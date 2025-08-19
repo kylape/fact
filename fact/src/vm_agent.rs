@@ -10,7 +10,6 @@ use fact_api::{
     },
     virtualmachine::v1::IndexReport,
     scanner::v4::{Contents, Package},
-    storage::EmbeddedImageScanComponent,
 };
 use tokio::{
     sync::mpsc,
@@ -77,20 +76,13 @@ impl VmAgent {
             .filter_map(|line| {
                 let parts: Vec<&str> = line.split('|').collect();
                 if parts.len() >= 4 {
-                    Some(EmbeddedImageScanComponent {
+                    let version = format!("{}-{}", parts[1], parts[2]); // Combine version and release
+                    Some(Package {
+                        id: format!("{}-{}", parts[0], version),
                         name: parts[0].to_string(),
-                        version: format!("{}-{}", parts[1], parts[2]), // Combine version and release
-                        architecture: parts[3].to_string(),
-                        source: 0, // SourceType::Os
-                        license: None,
-                        vulns: vec![],
-                        priority: 0,
-                        location: String::new(),
-                        risk_score: 0.0,
-                        fixed_by: String::new(),
-                        executables: vec![],
-                        has_layer_index: None,
-                        set_top_cvss: None,
+                        version,
+                        arch: parts[3].to_string(),
+                        ..Default::default()
                     })
                 } else {
                     None
@@ -131,22 +123,11 @@ impl VmAgent {
         Ok(client)
     }
 
-    async fn send_grpc(&self, url: String, pkgs: Vec<EmbeddedImageScanComponent>) -> anyhow::Result<()> {
+    async fn send_grpc(&self, url: String, pkgs: Vec<Package>) -> anyhow::Result<()> {
         let mut client = self.create_client(url).await?;
 
-        // Convert EmbeddedImageScanComponent to scanner.v4.Package format
-        let packages: Vec<Package> = pkgs.into_iter().map(|comp| {
-            Package {
-                id: format!("{}-{}", comp.name, comp.version),
-                name: comp.name,
-                version: comp.version,
-                arch: comp.architecture,
-                ..Default::default()
-            }
-        }).collect();
-
         let contents = Contents {
-            packages,
+            packages: pkgs,
             ..Default::default()
         };
 
@@ -169,7 +150,7 @@ impl VmAgent {
         Ok(())
     }
 
-    async fn send_vsock(&self, pkgs: Vec<EmbeddedImageScanComponent>) -> anyhow::Result<()> {
+    async fn send_vsock(&self, pkgs: Vec<Package>) -> anyhow::Result<()> {
         if !VsockClient::is_available() {
             return Err(anyhow::anyhow!("VSOCK is not available on this system"));
         }
@@ -177,19 +158,8 @@ impl VmAgent {
         let mut client = VsockClient::connect()
             .context("Failed to connect to VSOCK endpoint")?;
 
-        // Convert to new IndexReport format
-        let packages: Vec<Package> = pkgs.into_iter().map(|comp| {
-            Package {
-                id: format!("{}-{}", comp.name, comp.version),
-                name: comp.name,
-                version: comp.version,
-                arch: comp.architecture,
-                ..Default::default()
-            }
-        }).collect();
-
         let contents = Contents {
-            packages,
+            packages: pkgs,
             ..Default::default()
         };
 
