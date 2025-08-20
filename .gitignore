@@ -16,3 +16,6 @@ __pycache__/
 include/
 protoc-*.zip
 readme.txt
+
+bin/
+certs/

@@ -39,6 +39,15 @@ static HOSTNAME: LazyLock<String> = LazyLock::new(|| {
     "no-hostname".to_string()
 });
 
+static SYSTEM_CPE: LazyLock<String> = LazyLock::new(|| {
+    let cpe_path = HOST_MOUNT.join("/etc/system-release-cpe");
+    if cpe_path.exists() {
+        read_to_string(cpe_path).unwrap_or_default().trim().to_string()
+    } else {
+        String::new()
+    }
+});
+
 #[derive(Debug, Clone)]
 struct UserAgentInterceptor {}
 
@@ -82,6 +91,7 @@ impl VmAgent {
                         name: parts[0].to_string(),
                         version,
                         arch: parts[3].to_string(),
+                        cpe: SYSTEM_CPE.clone(),
                         ..Default::default()
                     })
                 } else {
