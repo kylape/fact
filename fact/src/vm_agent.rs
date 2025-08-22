@@ -1,4 +1,4 @@
-use std::{env, fs::read_to_string, path::PathBuf, process::Command, str::FromStr, sync::LazyLock};
+use std::{env, fs::read_to_string, path::PathBuf, process::Command, str::FromStr, sync::LazyLock, collections::HashMap};
 
 use anyhow::Context;
 use crate::certs::Certs;
@@ -9,7 +9,7 @@ use fact_api::{
         UpsertVirtualMachineIndexReportRequest,
     },
     virtualmachine::v1::IndexReport,
-    scanner::v4::{Contents, Package},
+    scanner::v4::{Contents, Package, Distribution},
 };
 use tokio::{
     sync::mpsc,
@@ -47,6 +47,50 @@ static SYSTEM_CPE: LazyLock<String> = LazyLock::new(|| {
         String::new()
     }
 });
+
+static DISTRIBUTION: LazyLock<Distribution> = LazyLock::new(|| {
+    create_distribution()
+});
+
+fn create_distribution() -> Distribution {
+    let os_release_path = HOST_MOUNT.join("/etc/os-release");
+    let mut fields = HashMap::new();
+    
+    if os_release_path.exists() {
+        if let Ok(content) = read_to_string(&os_release_path) {
+            for line in content.lines() {
+                if let Some((key, value)) = line.split_once('=') {
+                    let value = value.trim_matches('"');
+                    fields.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+    }
+    
+    // Get system architecture
+    let arch = std::process::Command::new("uname")
+        .arg("-m")
+        .output()
+        .ok()
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    
+    let id = fields.get("ID").cloned().unwrap_or_else(|| "unknown".to_string());
+    let version = fields.get("VERSION_ID").cloned().unwrap_or_else(|| "unknown".to_string());
+    
+    Distribution {
+        id: format!("{}-{}", id, version),
+        did: id.clone(),
+        name: fields.get("NAME").cloned().unwrap_or_else(|| "Unknown".to_string()),
+        version: version.clone(),
+        version_code_name: fields.get("VERSION_CODENAME").cloned().unwrap_or_default(),
+        version_id: version,
+        arch,
+        cpe: fields.get("CPE_NAME").cloned().unwrap_or_default(),
+        pretty_name: fields.get("PRETTY_NAME").cloned().unwrap_or_else(|| "Unknown".to_string()),
+    }
+}
 
 #[derive(Debug, Clone)]
 struct UserAgentInterceptor {}
@@ -138,10 +182,12 @@ impl VmAgent {
 
         let contents = Contents {
             packages: pkgs,
+            distributions: vec![DISTRIBUTION.clone()],
             ..Default::default()
         };
 
         let index_v4 = fact_api::scanner::v4::IndexReport {
+            hash_id: format!("/v4/vm/{}", HOSTNAME.as_str()),
             success: true,
             contents: Some(contents),
             ..Default::default()
@@ -151,6 +197,8 @@ impl VmAgent {
             vsock_cid: HOSTNAME.to_string(), // Use hostname as identifier for now
             index_v4: Some(index_v4),
         };
+
+        println!("Full IndexReport content (gRPC): {:#?}", index_report);
 
         let request = UpsertVirtualMachineIndexReportRequest {
             index_report: Some(index_report),
@@ -170,6 +218,7 @@ impl VmAgent {
 
         let contents = Contents {
             packages: pkgs,
+            distributions: vec![DISTRIBUTION.clone()],
             ..Default::default()
         };
 
@@ -183,6 +232,8 @@ impl VmAgent {
             vsock_cid: HOSTNAME.to_string(),
             index_v4: Some(index_v4),
         };
+
+        println!("Full IndexReport content (VSOCK): {:#?}", index_report);
 
         // Serialize the IndexReport to protobuf bytes
         let data = index_report.encode_to_vec();
