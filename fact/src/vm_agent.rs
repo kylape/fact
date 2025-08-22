@@ -9,7 +9,7 @@ use fact_api::{
         UpsertVirtualMachineIndexReportRequest,
     },
     virtualmachine::v1::IndexReport,
-    scanner::v4::{Contents, Package, Distribution},
+    scanner::v4::{Contents, Package, Distribution, Repository, Environment, environment},
 };
 use tokio::{
     sync::mpsc,
@@ -170,12 +170,28 @@ impl VmAgent {
                 let parts: Vec<&str> = line.split('|').collect();
                 if parts.len() >= 4 {
                     let version = format!("{}-{}", parts[1], parts[2]); // Combine version and release
+                    let package_name = parts[0];
+                    let arch = parts[3];
+                    
+                    // Create source package info (required by Scanner V4)
+                    let source_package = Package {
+                        name: package_name.to_string(),
+                        version: version.clone(),
+                        kind: "source".to_string(),
+                        cpe: "cpe:2.3:*:*:*:*:*:*:*:*:*:*:*".to_string(),
+                        ..Default::default()
+                    };
+                    
                     Some(Package {
-                        id: format!("{}-{}", parts[0], version),
-                        name: parts[0].to_string(),
-                        version,
-                        arch: parts[3].to_string(),
-                        cpe: SYSTEM_CPE.clone(),
+                        id: format!("{}-{}", package_name, version),
+                        name: package_name.to_string(),
+                        version: version.clone(),
+                        kind: "binary".to_string(),  // Required: specify this is a binary package
+                        source: Some(Box::new(source_package)),  // Required: source package info
+                        package_db: "sqlite:usr/share/rpm".to_string(),  // Required: RPM database identifier
+                        repository_hint: format!("rpm:{}:{}", arch, version),  // Required: repository hint
+                        arch: arch.to_string(),
+                        cpe: "cpe:2.3:*:*:*:*:*:*:*:*:*:*:*".to_string(),  // Required: package CPE format (not OS CPE)
                         ..Default::default()
                     })
                 } else {
@@ -220,9 +236,34 @@ impl VmAgent {
     async fn send_grpc(&self, url: String, pkgs: Vec<Package>) -> anyhow::Result<()> {
         let mut client = self.create_client(url).await?;
 
+        // Create repository information (required by Scanner V4)
+        let repository = Repository {
+            id: "0".to_string(),
+            name: format!("cpe:/{}", SYSTEM_CPE.clone()),
+            key: "rhel-cpe-repository".to_string(),
+            cpe: SYSTEM_CPE.clone(),
+            ..Default::default()
+        };
+
+        // Create environment mapping (required by Scanner V4)
+        let mut environments = std::collections::HashMap::new();
+        for (idx, pkg) in pkgs.iter().enumerate() {
+            let env = Environment {
+                package_db: "sqlite:usr/share/rpm".to_string(),
+                introduced_in: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                repository_ids: vec!["0".to_string()],
+                ..Default::default()
+            };
+            environments.insert(idx.to_string(), environment::List {
+                environments: vec![env],
+            });
+        }
+
         let contents = Contents {
             packages: pkgs,
             distributions: vec![DISTRIBUTION.clone()],
+            repositories: vec![repository],
+            environments,
             ..Default::default()
         };
 
@@ -256,9 +297,34 @@ impl VmAgent {
         let mut client = VsockClient::connect()
             .context("Failed to connect to VSOCK endpoint")?;
 
+        // Create repository information (required by Scanner V4)
+        let repository = Repository {
+            id: "0".to_string(),
+            name: format!("cpe:/{}", SYSTEM_CPE.clone()),
+            key: "rhel-cpe-repository".to_string(),
+            cpe: SYSTEM_CPE.clone(),
+            ..Default::default()
+        };
+
+        // Create environment mapping (required by Scanner V4)
+        let mut environments = std::collections::HashMap::new();
+        for (idx, pkg) in pkgs.iter().enumerate() {
+            let env = Environment {
+                package_db: "sqlite:usr/share/rpm".to_string(),
+                introduced_in: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                repository_ids: vec!["0".to_string()],
+                ..Default::default()
+            };
+            environments.insert(idx.to_string(), environment::List {
+                environments: vec![env],
+            });
+        }
+
         let contents = Contents {
             packages: pkgs,
             distributions: vec![DISTRIBUTION.clone()],
+            repositories: vec![repository],
+            environments,
             ..Default::default()
         };
 
