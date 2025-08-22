@@ -79,13 +79,16 @@ fn create_distribution() -> Distribution {
     let id = fields.get("ID").cloned().unwrap_or_else(|| "unknown".to_string());
     let version = fields.get("VERSION_ID").cloned().unwrap_or_else(|| "unknown".to_string());
     
+    // Extract major version only (e.g., "43.1" -> "43", "9.6" -> "9")
+    let major_version = version.split('.').next().unwrap_or(&version).to_string();
+    
     Distribution {
-        id: format!("{}-{}", id, version),
+        id: format!("{}-{}", id, major_version),
         did: id.clone(),
         name: fields.get("NAME").cloned().unwrap_or_else(|| "Unknown".to_string()),
         version: version.clone(),
         version_code_name: fields.get("VERSION_CODENAME").cloned().unwrap_or_default(),
-        version_id: version,
+        version_id: major_version,
         arch,
         cpe: fields.get("CPE_NAME").cloned().unwrap_or_default(),
         pretty_name: fields.get("PRETTY_NAME").cloned().unwrap_or_else(|| "Unknown".to_string()),
