@@ -39,18 +39,39 @@ static HOSTNAME: LazyLock<String> = LazyLock::new(|| {
     "no-hostname".to_string()
 });
 
+static OS_RELEASE: LazyLock<HashMap<String, String>> = LazyLock::new(|| {
+    parse_os_release()
+});
+
 static SYSTEM_CPE: LazyLock<String> = LazyLock::new(|| {
-    let cpe_path = HOST_MOUNT.join("/etc/system-release-cpe");
-    if cpe_path.exists() {
-        read_to_string(cpe_path).unwrap_or_default().trim().to_string()
+    if let Some(cpe_22) = OS_RELEASE.get("CPE_NAME") {
+        convert_cpe_22_to_23(cpe_22)
     } else {
         String::new()
     }
 });
 
 static DISTRIBUTION: LazyLock<Distribution> = LazyLock::new(|| {
-    create_distribution()
+    create_distribution_from_os_release(&OS_RELEASE)
 });
+
+fn parse_os_release() -> HashMap<String, String> {
+    let os_release_path = HOST_MOUNT.join("/etc/os-release");
+    let mut fields = HashMap::new();
+    
+    if os_release_path.exists() {
+        if let Ok(content) = read_to_string(&os_release_path) {
+            for line in content.lines() {
+                if let Some((key, value)) = line.split_once('=') {
+                    let value = value.trim_matches('"');
+                    fields.insert(key.to_string(), value.to_string());
+                }
+            }
+        }
+    }
+    
+    fields
+}
 
 fn convert_cpe_22_to_23(cpe_22: &str) -> String {
     // Convert CPE 2.2 format (cpe:/part:vendor:product:version) to CPE 2.3 format
@@ -74,20 +95,7 @@ fn convert_cpe_22_to_23(cpe_22: &str) -> String {
     format!("cpe:2.3:{}:{}:{}:{}:*:*:*:*:*:*:*", part, vendor, product, version)
 }
 
-fn create_distribution() -> Distribution {
-    let os_release_path = HOST_MOUNT.join("/etc/os-release");
-    let mut fields = HashMap::new();
-    
-    if os_release_path.exists() {
-        if let Ok(content) = read_to_string(&os_release_path) {
-            for line in content.lines() {
-                if let Some((key, value)) = line.split_once('=') {
-                    let value = value.trim_matches('"');
-                    fields.insert(key.to_string(), value.to_string());
-                }
-            }
-        }
-    }
+fn create_distribution_from_os_release(fields: &HashMap<String, String>) -> Distribution {
     
     // Get system architecture
     let arch = std::process::Command::new("uname")
