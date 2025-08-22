@@ -52,6 +52,28 @@ static DISTRIBUTION: LazyLock<Distribution> = LazyLock::new(|| {
     create_distribution()
 });
 
+fn convert_cpe_22_to_23(cpe_22: &str) -> String {
+    // Convert CPE 2.2 format (cpe:/part:vendor:product:version) to CPE 2.3 format
+    // CPE 2.3: cpe:2.3:part:vendor:product:version:update:edition:language:sw_edition:target_sw:target_hw:other
+    
+    if !cpe_22.starts_with("cpe:/") {
+        return cpe_22.to_string(); // Return as-is if not CPE 2.2 format
+    }
+    
+    let parts: Vec<&str> = cpe_22.trim_start_matches("cpe:/").split(':').collect();
+    if parts.len() < 4 {
+        return cpe_22.to_string(); // Return as-is if malformed
+    }
+    
+    let part = parts[0]; // o, a, h (operating system, application, hardware)
+    let vendor = parts[1];
+    let product = parts[2];
+    let version = parts[3];
+    
+    // CPE 2.3 format with wildcard (*) for unspecified fields
+    format!("cpe:2.3:{}:{}:{}:{}:*:*:*:*:*:*:*", part, vendor, product, version)
+}
+
 fn create_distribution() -> Distribution {
     let os_release_path = HOST_MOUNT.join("/etc/os-release");
     let mut fields = HashMap::new();
@@ -82,6 +104,13 @@ fn create_distribution() -> Distribution {
     // Extract major version only (e.g., "43.1" -> "43", "9.6" -> "9")
     let major_version = version.split('.').next().unwrap_or(&version).to_string();
     
+    // Convert CPE 2.2 to CPE 2.3 format
+    let cpe_23 = if let Some(cpe_22) = fields.get("CPE_NAME") {
+        convert_cpe_22_to_23(cpe_22)
+    } else {
+        String::new()
+    };
+    
     Distribution {
         id: format!("{}-{}", id, major_version),
         did: id.clone(),
@@ -90,7 +119,7 @@ fn create_distribution() -> Distribution {
         version_code_name: fields.get("VERSION_CODENAME").cloned().unwrap_or_default(),
         version_id: major_version,
         arch,
-        cpe: fields.get("CPE_NAME").cloned().unwrap_or_default(),
+        cpe: cpe_23,
         pretty_name: fields.get("PRETTY_NAME").cloned().unwrap_or_else(|| "Unknown".to_string()),
     }
 }
